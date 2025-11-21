@@ -8,7 +8,6 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 10000;
 
-// 1. Validate API Key
 if (!process.env.GEMINI_API_KEY) {
     console.error("CRITICAL ERROR: GEMINI_API_KEY is missing!");
     process.exit(1);
@@ -22,26 +21,26 @@ app.get("/", (req, res) => {
 });
 
 wss.on("connection", (clientWs, req) => {
-    console.log("--> New Client Connected");
+    console.log("--> Client Connected");
+    
+    // 1. Start Timer for Server Logs
+    const startTime = Date.now();
 
     const params = new URLSearchParams(req.url.replace('/?', ''));
     const userName = params.get('name') || "Student";
     const voiceName = params.get('voice') || "Kore"; 
     const style = params.get('style') || "Casual";
 
-    // 2. Google Connection
     const GEMINI_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${process.env.GEMINI_API_KEY}`;
     
     let googleWs = null;
     try {
         googleWs = new WebSocket(GEMINI_URL);
     } catch (e) {
-        console.error("Socket Config Error:", e);
-        clientWs.close(1011, "Server Configuration Error");
+        clientWs.close(1011, "Server Config Error");
         return;
     }
 
-    // 3. Persona & Rules
     const isMaleVoice = ['Charon', 'Fenrir', 'Puck', 'Zephyr'].includes(voiceName);
     const botName = isMaleVoice ? "Rahul" : "Riya";
     
@@ -56,23 +55,14 @@ wss.on("connection", (clientWs, req) => {
     4. NOISE HANDLING: If you hear silence/static, do NOT respond.
     `;
 
-    // 4. Handle Google Events
     googleWs.on("open", () => {
-        console.log("--> Connected to Google Gemini");
-        
         const setupMessage = {
             setup: {
                 model: "models/gemini-2.0-flash-exp", 
                 generation_config: {
-                    // CRITICAL FIX: Only request "AUDIO". 
-                    // Requesting "TEXT" here causes Error 1007.
-                    response_modalities: ["AUDIO"],
+                    response_modalities: ["AUDIO"], // Audio-only prevents Error 1007
                     speech_config: {
-                        voice_config: { 
-                            prebuilt_voice_config: { 
-                                voice_name: voiceName 
-                            } 
-                        }
+                        voice_config: { prebuilt_voice_config: { voice_name: voiceName } }
                     }
                 },
                 system_instruction: {
@@ -83,32 +73,25 @@ wss.on("connection", (clientWs, req) => {
         googleWs.send(JSON.stringify(setupMessage));
     });
 
-    googleWs.on("error", (err) => {
-        console.error("!! Google WebSocket Error:", err.message);
-        if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.close(1011, `Google Error: ${err.message}`);
-        }
-    });
-
+    googleWs.on("error", (err) => console.error("Google Error:", err.message));
+    
     googleWs.on("close", (code, reason) => {
-        console.log(`!! Google Disconnected. Code: ${code}, Reason: ${reason.toString()}`);
-        if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.close(1000, "Google session ended.");
-        }
+        console.log(`Google Closed: ${code} ${reason}`);
+        if (clientWs.readyState === WebSocket.OPEN) clientWs.close();
     });
 
-    // 5. Relay Logic
-    // Browser Mic -> Google
+    // 2. Relay Logic
     clientWs.on("message", (data) => {
         if (googleWs.readyState === WebSocket.OPEN) googleWs.send(data);
     });
 
-    // Google Audio -> Browser Speaker
     googleWs.on("message", (data) => {
         if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data);
     });
 
     clientWs.on("close", () => {
+        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+        console.log(`Session ended. Duration: ${duration}s`);
         if (googleWs.readyState === WebSocket.OPEN) googleWs.close();
     });
 });
