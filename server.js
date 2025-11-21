@@ -8,14 +8,11 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 10000;
 
-// 1. Validate API Key Format
-const API_KEY = process.env.GEMINI_API_KEY;
-if (!API_KEY) {
-    console.error("CRITICAL ERROR: GEMINI_API_KEY is missing in Environment Variables!");
+// 1. Validate API Key
+if (!process.env.GEMINI_API_KEY) {
+    console.error("CRITICAL ERROR: GEMINI_API_KEY is missing!");
     process.exit(1);
 }
-// Log key status (masked) for debugging
-console.log(`Server starting with API Key: ${API_KEY.substring(0, 8)}... (Length: ${API_KEY.length})`);
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
@@ -33,7 +30,7 @@ wss.on("connection", (clientWs, req) => {
     const style = params.get('style') || "Casual";
 
     // 2. Google Connection
-    const GEMINI_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${API_KEY}`;
+    const GEMINI_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${process.env.GEMINI_API_KEY}`;
     
     let googleWs = null;
     try {
@@ -44,41 +41,47 @@ wss.on("connection", (clientWs, req) => {
         return;
     }
 
-    // 3. Define Persona
-    const isMaleVoice = ['Charon', 'Fenrir', 'Puck'].includes(voiceName);
+    // 3. Persona & Rules
+    const isMaleVoice = ['Charon', 'Fenrir', 'Puck', 'Zephyr'].includes(voiceName);
     const botName = isMaleVoice ? "Rahul" : "Riya";
     
-    const systemInstruction = `
+    const systemInstructionText = `
     You are ${botName}, an expert English language coach.
     User: ${userName}. Level: Intermediate. Style: ${style}.
+    
     RULES:
     1. Greet immediately: "Namaskar ${userName}! I am ${botName}. Shall we start?"
     2. Speak mostly English (90%). Explain grammar in Marathi (10%).
     3. Keep responses concise (2-3 sentences).
-    4. NOISE HANDLING: If you hear only silence or static, output NOTHING. Do not say "Thank you".
+    4. NOISE HANDLING: If you hear silence/static, do NOT respond.
     `;
 
+    // 4. Handle Google Events
     googleWs.on("open", () => {
         console.log("--> Connected to Google Gemini");
         
+        // CRITICAL FIX: Use snake_case for WebSocket JSON keys
         const setupMessage = {
             setup: {
                 model: "models/gemini-2.0-flash-exp", 
-                generationConfig: {
-                    responseModalities: ["AUDIO", "TEXT"],
-                    speechConfig: {
-                        voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } }
+                generation_config: {
+                    response_modalities: ["AUDIO", "TEXT"],
+                    speech_config: {
+                        voice_config: { 
+                            prebuilt_voice_config: { 
+                                voice_name: voiceName 
+                            } 
+                        }
                     }
                 },
-                systemInstruction: {
-                    parts: [{ text: systemInstruction }]
+                system_instruction: {
+                    parts: [{ text: systemInstructionText }]
                 }
             }
         };
         googleWs.send(JSON.stringify(setupMessage));
     });
 
-    // 4. Enhanced Error Logging
     googleWs.on("error", (err) => {
         console.error("!! Google WebSocket Error:", err.message);
         if (clientWs.readyState === WebSocket.OPEN) {
@@ -87,19 +90,9 @@ wss.on("connection", (clientWs, req) => {
     });
 
     googleWs.on("close", (code, reason) => {
-        // Decode buffer reason if necessary, but usually it's text
-        const reasonText = reason.toString();
-        console.log(`!! Google Disconnected. Code: ${code}, Reason: ${reasonText}`);
-        
+        console.log(`!! Google Disconnected. Code: ${code}, Reason: ${reason.toString()}`);
         if (clientWs.readyState === WebSocket.OPEN) {
-            // Send the specific reason to the frontend
-            if (reasonText.includes("API_KEY")) {
-                clientWs.close(1008, "Invalid API Key.");
-            } else if (code === 1000) {
-                clientWs.close(1000, "Session ended normally.");
-            } else {
-                clientWs.close(1011, `Google Closed Session (Code ${code}). Check Logs.`);
-            }
+            clientWs.close(1000, "Google session ended.");
         }
     });
 
