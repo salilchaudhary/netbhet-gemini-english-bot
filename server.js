@@ -22,7 +22,7 @@ app.get("/", (req, res) => {
 });
 
 wss.on("connection", (clientWs, req) => {
-    console.log("--> Client Connected");
+    console.log("--> New Client Connected");
 
     const params = new URLSearchParams(req.url.replace('/?', ''));
     const userName = params.get('name') || "Student";
@@ -60,12 +60,13 @@ wss.on("connection", (clientWs, req) => {
     googleWs.on("open", () => {
         console.log("--> Connected to Google Gemini");
         
-        // CRITICAL FIX: Use snake_case for WebSocket JSON keys
         const setupMessage = {
             setup: {
                 model: "models/gemini-2.0-flash-exp", 
                 generation_config: {
-                    response_modalities: ["AUDIO", "TEXT"],
+                    // CRITICAL FIX: Only request "AUDIO". 
+                    // Requesting "TEXT" here causes Error 1007.
+                    response_modalities: ["AUDIO"],
                     speech_config: {
                         voice_config: { 
                             prebuilt_voice_config: { 
@@ -97,10 +98,12 @@ wss.on("connection", (clientWs, req) => {
     });
 
     // 5. Relay Logic
+    // Browser Mic -> Google
     clientWs.on("message", (data) => {
         if (googleWs.readyState === WebSocket.OPEN) googleWs.send(data);
     });
 
+    // Google Audio -> Browser Speaker
     googleWs.on("message", (data) => {
         if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data);
     });
