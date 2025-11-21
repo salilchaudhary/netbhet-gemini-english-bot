@@ -8,11 +8,14 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 10000;
 
-// 1. Check API Key immediately
-if (!process.env.GEMINI_API_KEY) {
+// 1. Validate API Key Format
+const API_KEY = process.env.GEMINI_API_KEY;
+if (!API_KEY) {
     console.error("CRITICAL ERROR: GEMINI_API_KEY is missing in Environment Variables!");
     process.exit(1);
 }
+// Log key status (masked) for debugging
+console.log(`Server starting with API Key: ${API_KEY.substring(0, 8)}... (Length: ${API_KEY.length})`);
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
@@ -22,42 +25,39 @@ app.get("/", (req, res) => {
 });
 
 wss.on("connection", (clientWs, req) => {
-    console.log("--> New Client Connected");
+    console.log("--> Client Connected");
 
     const params = new URLSearchParams(req.url.replace('/?', ''));
     const userName = params.get('name') || "Student";
     const voiceName = params.get('voice') || "Kore"; 
     const style = params.get('style') || "Casual";
 
-    // 2. Define Google Connection
-    const GEMINI_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${process.env.GEMINI_API_KEY}`;
+    // 2. Google Connection
+    const GEMINI_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${API_KEY}`;
     
     let googleWs = null;
-
     try {
         googleWs = new WebSocket(GEMINI_URL);
-    } catch (err) {
-        console.error("Failed to create Google WebSocket:", err);
-        clientWs.close(1011, "Server failed to contact Google.");
+    } catch (e) {
+        console.error("Socket Config Error:", e);
+        clientWs.close(1011, "Server Configuration Error");
         return;
     }
 
-    // 3. Define Training Instructions
+    // 3. Define Persona
     const isMaleVoice = ['Charon', 'Fenrir', 'Puck'].includes(voiceName);
     const botName = isMaleVoice ? "Rahul" : "Riya";
     
     const systemInstruction = `
     You are ${botName}, an expert English language coach.
     User: ${userName}. Level: Intermediate. Style: ${style}.
-    
     RULES:
-    1. Greet immediately: "Namaskar ${userName}! I am ${botName}. Shall we start practice?"
+    1. Greet immediately: "Namaskar ${userName}! I am ${botName}. Shall we start?"
     2. Speak mostly English (90%). Explain grammar in Marathi (10%).
-    3. Keep responses concise.
-    4. No politics or adult topics.
+    3. Keep responses concise (2-3 sentences).
+    4. NOISE HANDLING: If you hear only silence or static, output NOTHING. Do not say "Thank you".
     `;
 
-    // 4. Handle Google Events
     googleWs.on("open", () => {
         console.log("--> Connected to Google Gemini");
         
@@ -78,37 +78,41 @@ wss.on("connection", (clientWs, req) => {
         googleWs.send(JSON.stringify(setupMessage));
     });
 
+    // 4. Enhanced Error Logging
     googleWs.on("error", (err) => {
-        console.error("xx Google WebSocket Error:", err.message);
-        // Send meaningful error to client
+        console.error("!! Google WebSocket Error:", err.message);
         if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.close(1011, "Google API Error. Check Server Logs.");
+            clientWs.close(1011, `Google Error: ${err.message}`);
         }
     });
 
     googleWs.on("close", (code, reason) => {
-        console.log(`xx Google Disconnected: ${code} ${reason}`);
+        // Decode buffer reason if necessary, but usually it's text
+        const reasonText = reason.toString();
+        console.log(`!! Google Disconnected. Code: ${code}, Reason: ${reasonText}`);
+        
         if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.close(1000, "Google session ended.");
+            // Send the specific reason to the frontend
+            if (reasonText.includes("API_KEY")) {
+                clientWs.close(1008, "Invalid API Key.");
+            } else if (code === 1000) {
+                clientWs.close(1000, "Session ended normally.");
+            } else {
+                clientWs.close(1011, `Google Closed Session (Code ${code}). Check Logs.`);
+            }
         }
     });
 
-    // 5. Relay Messages
+    // 5. Relay Logic
     clientWs.on("message", (data) => {
-        if (googleWs.readyState === WebSocket.OPEN) {
-            googleWs.send(data);
-        }
+        if (googleWs.readyState === WebSocket.OPEN) googleWs.send(data);
     });
 
     googleWs.on("message", (data) => {
-        if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.send(data);
-        }
+        if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data);
     });
 
-    // Cleanup
     clientWs.on("close", () => {
-        console.log("Client Disconnected");
         if (googleWs.readyState === WebSocket.OPEN) googleWs.close();
     });
 });
